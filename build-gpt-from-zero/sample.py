@@ -43,13 +43,18 @@ stoi, itos = meta['stoi'], meta['itos']
 encode = lambda s: [stoi[c] for c in s]
 decode = lambda l: ''.join([itos[i] for i in l])
 
+# 将prompt提示文本编码为整数列表.
 start_ids = encode(start)
+# 将整数列表转换成张量.
 x = (torch.tensor(start_ids, dtype=torch.long, device=device)[None, ...])
 
 # 生成文本.
+# 禁用梯度计算.
 with torch.no_grad():
     with ctx:
         for k in range(num_samples):
+            # 根据x预测得到y
             y = model.generate(x, max_new_tokens, temperature=temperature, top_k=top_k)
+            # 将预测得到的y解码为文本字符串.
             print(decode(y[0].tolist()))
             print('---------------')

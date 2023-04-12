@@ -1,41 +1,49 @@
 import math
-import inspect
 from dataclasses import dataclass
 
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
 
-# @torch.jit.script # good to enable when not using torch.compile, disable when using (our default)
 def new_gelu(x):
     """
-    Implementation of the GELU activation function currently in Google BERT repo (identical to OpenAI GPT).
-    Reference: Gaussian Error Linear Units (GELU) paper: https://arxiv.org/abs/1606.08415
+    使用GeLU激活函数, 以下代码是GeLU激活函数的公式转换而来.
     """
     return 0.5 * x * (1.0 + torch.tanh(math.sqrt(2.0 / math.pi) * (x + 0.044715 * torch.pow(x, 3.0))))
 
 class LayerNorm(nn.Module):
-    """ LayerNorm but with an optional bias. PyTorch doesn't support simply bias=False """
+    """
+    层归一化模块.
+    """
 
     def __init__(self, ndim, bias):
         super().__init__()
+        # 层归一化模块的权重的初始值为1.
         self.weight = nn.Parameter(torch.ones(ndim))
+        # 如果有偏置, 则将所有偏置初始化为0.
         self.bias = nn.Parameter(torch.zeros(ndim)) if bias else None
 
     def forward(self, input):
+        """
+        `forward`为前向传播函数, 会自动调用, `input`参数为`torch.tensor`张量类型.
+        """
         return F.layer_norm(input, self.weight.shape, self.weight, self.bias, 1e-5)
 
 class CausalSelfAttention(nn.Module):
+    """
+    因果自注意力模块
+    """
 
     def __init__(self, config):
         super().__init__()
+        # 需要确保词嵌入向量的维度是`head`头数量的整数倍.
+        # 多头注意力.
         assert config.n_embd % config.n_head == 0
         # key, query, value projections for all heads, but in a batch
         self.c_attn = nn.Linear(config.n_embd, 3 * config.n_embd, bias=config.bias)
         # output projection
         self.c_proj = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
-        # regularization
-        self.attn_dropout = nn.Dropout(config.dropout)
+        # 正则化(regularization)
         self.resid_dropout = nn.Dropout(config.dropout)
         self.n_head = config.n_head
         self.n_embd = config.n_embd
@@ -59,6 +67,9 @@ class CausalSelfAttention(nn.Module):
         return y
 
 class MLP(nn.Module):
+    """
+    多层感知机模块.
+    """
 
     def __init__(self, config):
         super().__init__()
@@ -74,6 +85,9 @@ class MLP(nn.Module):
         return x
 
 class Block(nn.Module):
+    """
+    Block模块.
+    """
 
     def __init__(self, config):
         super().__init__()
@@ -89,6 +103,9 @@ class Block(nn.Module):
 
 @dataclass
 class GPTConfig:
+    """
+    GPT模型的初始配置.
+    """
     block_size: int = 1024
     vocab_size: int = 50304 # GPT-2 vocab_size of 50257, padded up to nearest multiple of 64 for efficiency
     n_layer: int = 12
@@ -98,6 +115,9 @@ class GPTConfig:
     bias: bool = True # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
 
 class GPT(nn.Module):
+    """
+    GPT模型的实现.
+    """
 
     def __init__(self, config):
         super().__init__()
@@ -131,10 +151,7 @@ class GPT(nn.Module):
 
     def get_num_params(self, non_embedding=True):
         """
-        Return the number of parameters in the model.
-        For non-embedding count (default), the position embeddings get subtracted.
-        The token embeddings would too, except due to the parameter sharing these
-        params are actually used as weights in the final layer, so we include them.
+        获取模型的参数数量.
         """
         n_params = sum(p.numel() for p in self.parameters())
         if non_embedding:
@@ -142,6 +159,9 @@ class GPT(nn.Module):
         return n_params
 
     def _init_weights(self, module):
+        """
+        初始化模块中的权重.
+        """
         if isinstance(module, nn.Linear):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
             if module.bias is not None:
@@ -186,10 +206,13 @@ class GPT(nn.Module):
 
     def configure_optimizers(self, weight_decay, learning_rate, betas, device_type):
         """
-        This long function is unfortunately doing something very simple and is being very defensive:
-        We are separating out all parameters of the model into two buckets: those that will experience
-        weight decay for regularization and those that won't (biases, and layernorm/embedding weights).
-        We are then returning the PyTorch optimizer object.
+        这个函数虽然代码很长, 但做的事情很简单:
+        我们将所有的参数分成两部分:
+
+        - 一部分为进行权重衰减, 放置过拟合.
+        - 另一部分参数(权重, 偏置)不变.
+        
+        然后将优化器返回.
         """
 
         # separate out all parameters to those that will and won't experience regularizing weight decay

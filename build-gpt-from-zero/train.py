@@ -10,6 +10,7 @@ from model import GPTConfig, GPT
 
 # -----------------------------------------------------------------------------
 # I/O
+eval_interval = 2000
 log_interval = 1
 eval_iters = 20
 # 数据
@@ -20,7 +21,6 @@ block_size = 64
 n_layer = 4
 n_head = 4
 n_embd = 128
-dropout = 0.0 # for pretraining 0 is good, for finetuning try 0.1+
 bias = False # 在层归一化(LayerNorm)和线性变换(nn.Linear)中不使用偏置.
 # AdamW优化器(adamw optimizer)
 learning_rate = 1e-3 # 最大学习率
@@ -80,8 +80,7 @@ model_args = dict(
     n_embd=n_embd,
     block_size=block_size,
     bias=bias,
-    vocab_size=meta_vocab_size,
-    dropout=dropout
+    vocab_size=meta_vocab_size
 )
 
 # 从零训练一个新的模型

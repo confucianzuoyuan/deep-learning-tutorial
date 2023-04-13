@@ -10,25 +10,24 @@ import torch
 from model import GPTConfig, GPT
 
 # -----------------------------------------------------------------------------
-# default config values designed to train a gpt2 (124M) on OpenWebText
 # I/O
 eval_interval = 2000
 log_interval = 1
 eval_iters = 20
 eval_only = False # if True, script exits right after the first eval
-always_save_checkpoint = False # if True, always save a checkpoint after each eval
-# data
+always_save_checkpoint = False # 只在特定条件(训练完毕或者损失下降到一定程度)下, 将模型保存为检查点文件.
+# 数据
 gradient_accumulation_steps = 5 # used to simulate larger batch sizes
 batch_size = 12 # if gradient_accumulation_steps > 1, this is the micro-batch size
 block_size = 64
-# model
+# 模型的配置
 n_layer = 4
 n_head = 4
 n_embd = 128
 dropout = 0.0 # for pretraining 0 is good, for finetuning try 0.1+
 bias = False # do we use bias inside LayerNorm and Linear layers?
-# adamw optimizer
-learning_rate = 1e-3 # max learning rate
+# AdamW优化器(adamw optimizer)
+learning_rate = 1e-3 # 最大学习率
 max_iters = 2000 # total number of training iterations
 weight_decay = 1e-1
 beta1 = 0.9
@@ -38,9 +37,9 @@ grad_clip = 1.0 # clip gradients at this value, or disable if == 0.0
 decay_lr = True # whether to decay the learning rate
 warmup_iters = 100 # how many steps to warm up for
 lr_decay_iters = 2000 # should be ~= max_iters per Chinchilla
-min_lr = 1e-4 # minimum learning rate, should be ~= learning_rate/10 per Chinchilla
+min_lr = 1e-4 # 最小学习率, 取learning_rate/10.
 # system
-device = 'cpu' # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1' etc., or try 'mps' on macbooks
+device = 'cpu' # 使用cpu训练模型
 dtype = 'bfloat16' # 'float32', 'bfloat16', or 'float16', the latter will auto implement a GradScaler
 # -----------------------------------------------------------------------------
 config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))]
@@ -57,13 +56,18 @@ torch.backends.cudnn.allow_tf32 = True # allow tf32 on cudnn
 device_type = 'cpu' # for later use in torch.autocast
 ctx = nullcontext()
 
+# 读取训练数据集
 train_data = np.memmap('train.bin', dtype=np.uint16, mode='r')
+# 读取测试数据集
 val_data = np.memmap('val.bin', dtype=np.uint16, mode='r')
 def get_batch(split):
     data = train_data if split == 'train' else val_data
     ix = torch.randint(len(data) - block_size, (batch_size,))
+    # 《三国演义》文本中索引`i`到`i+block_size`的字符串为训练数据的输入数据.
     x = torch.stack([torch.from_numpy((data[i:i+block_size]).astype(np.int64)) for i in ix])
+    # 《三国演义》文本中索引`i+1`到`i+1+block_size`的字符串为训练数据的输出数据(标签数据).
     y = torch.stack([torch.from_numpy((data[i+1:i+1+block_size]).astype(np.int64)) for i in ix])
+    # 将张量移动到CPU上进行计算.
     x, y = x.to(device), y.to(device)
     return x, y
 
@@ -71,30 +75,37 @@ def get_batch(split):
 iter_num = 0
 best_val_loss = 1e9
 
-# attempt to derive vocab_size from the dataset
+# 读取数据集的元数据.
 with open('meta.pkl', 'rb') as f:
     meta = pickle.load(f)
 meta_vocab_size = meta['vocab_size']
-print(f"found vocab_size = {meta_vocab_size} (inside `meta.pkl`)")
+print(f"字符集的大小是: {meta_vocab_size}")
 
-# model init
-model_args = dict(n_layer=n_layer, n_head=n_head, n_embd=n_embd, block_size=block_size,
-                  bias=bias, vocab_size=meta_vocab_size, dropout=dropout) # start with model_args from command line
+# 模型初始化的一些超参数. 会覆盖掉GPTConfig的初始配置.
+model_args = dict(
+    n_layer=n_layer,
+    n_head=n_head,
+    n_embd=n_embd,
+    block_size=block_size,
+    bias=bias,
+    vocab_size=meta_vocab_size,
+    dropout=dropout
+)
 
-# init a new model from scratch
-print("Initializing a new model from scratch")
+# 从零训练一个新的模型
+print("从零训练一个新的模型")
+# 配置模型的超参数.
 gptconf = GPTConfig(**model_args)
+# 实例化一个模型.
 model = GPT(gptconf)
-# crop down the model block size if desired, using model surgery
-if block_size < model.config.block_size:
-    model.crop_block_size(block_size)
-    model_args['block_size'] = block_size # so that the checkpoint will have the right value
+# 使用cpu训练模型
 model.to(device)
 
-# initialize a GradScaler. If enabled=False scaler is a no-op
+# scaler的作用是使用混合精度的方式训练模型.
+# 混合精度的作用: 降低内存使用, 加快训练速度.
 scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
 
-# optimizer
+# 配置AdamW优化器.
 optimizer = model.configure_optimizers(weight_decay, learning_rate, (beta1, beta2), device_type)
 
 # helps estimate an arbitrarily accurate loss over either split using many batches
@@ -114,6 +125,7 @@ def estimate_loss():
     return out
 
 # learning rate decay scheduler (cosine with warmup)
+# 学习率衰减调度器.
 def get_lr(it):
     # 1) linear warmup for warmup_iters steps
     if it < warmup_iters:
@@ -127,15 +139,12 @@ def get_lr(it):
     coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio)) # coeff ranges 0..1
     return min_lr + coeff * (learning_rate - min_lr)
 
-# training loop
-X, Y = get_batch('train') # fetch the very first batch
+# 训练模型的循环.
+X, Y = get_batch('train') # X为训练数据中的输入数据, Y为训练数据中的输出数据(标签数据).
 t0 = time.time()
 local_iter_num = 0 # number of iterations in the lifetime of this process
-raw_model = model # unwrap DDP container if needed
-running_mfu = -1.0
 while True:
-
-    # determine and set the learning rate for this iteration
+    # 设置每一轮训练的学习率.
     lr = get_lr(iter_num) if decay_lr else learning_rate
     for param_group in optimizer.param_groups:
         param_group['lr'] = lr
@@ -148,14 +157,14 @@ while True:
             best_val_loss = losses['val']
             if iter_num > 0:
                 checkpoint = {
-                    'model': raw_model.state_dict(),
+                    'model': model.state_dict(),
                     'optimizer': optimizer.state_dict(),
                     'model_args': model_args,
                     'iter_num': iter_num,
                     'best_val_loss': best_val_loss,
                     'config': config,
                 }
-                print(f"saving checkpoint to `ckpt.pt`")
+                print(f"将模型的检查点文件保存到 `ckpt.pt`")
                 torch.save(checkpoint, 'ckpt.pt')
     if iter_num == 0 and eval_only:
         break
@@ -167,28 +176,28 @@ while True:
             logits, loss = model(X, Y)
         # immediately async prefetch next batch while model is doing the forward pass on the GPU
         X, Y = get_batch('train')
-        # backward pass, with gradient scaling if training in fp16
+        # 将损失(误差)反向传播.
         scaler.scale(loss).backward()
-    # clip the gradient
+    # 修剪梯度.
     if grad_clip != 0.0:
         scaler.unscale_(optimizer)
         torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
-    # step the optimizer and scaler if training in fp16
+    # 更新网络中的参数(权重参数和偏置参数).
     scaler.step(optimizer)
     scaler.update()
-    # flush the gradients as soon as we can, no need for this memory anymore
+    # 将梯度从内存中清空, 因为本轮训练的梯度不再需要了.
     optimizer.zero_grad(set_to_none=True)
 
-    # timing and logging
+    # 计算每轮训练的时间长度.
     t1 = time.time()
     dt = t1 - t0
     t0 = t1
     if iter_num % log_interval == 0:
         lossf = loss.item() # loss as float. note: this is a CPU-GPU sync point
-        print(f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms")
+        print(f"第{iter_num}轮: 损失大小 {lossf:.4f}, 本轮训练时长 {dt*1000:.2f}ms")
     iter_num += 1
     local_iter_num += 1
 
-    # termination conditions
+    # 终止条件
     if iter_num > max_iters:
         break

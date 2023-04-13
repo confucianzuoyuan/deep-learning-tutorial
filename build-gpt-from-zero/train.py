@@ -1,4 +1,3 @@
-import os
 import time
 import math
 import pickle
@@ -14,8 +13,6 @@ from model import GPTConfig, GPT
 eval_interval = 2000
 log_interval = 1
 eval_iters = 20
-eval_only = False # if True, script exits right after the first eval
-always_save_checkpoint = False # 只在特定条件(训练完毕或者损失下降到一定程度)下, 将模型保存为检查点文件.
 # 数据
 gradient_accumulation_steps = 5 # used to simulate larger batch sizes
 batch_size = 12 # if gradient_accumulation_steps > 1, this is the micro-batch size
@@ -124,7 +121,6 @@ def estimate_loss():
     model.train()
     return out
 
-# learning rate decay scheduler (cosine with warmup)
 # 学习率衰减调度器.
 def get_lr(it):
     # 1) linear warmup for warmup_iters steps
@@ -142,18 +138,17 @@ def get_lr(it):
 # 训练模型的循环.
 X, Y = get_batch('train') # X为训练数据中的输入数据, Y为训练数据中的输出数据(标签数据).
 t0 = time.time()
-local_iter_num = 0 # number of iterations in the lifetime of this process
 while True:
     # 设置每一轮训练的学习率.
     lr = get_lr(iter_num) if decay_lr else learning_rate
     for param_group in optimizer.param_groups:
         param_group['lr'] = lr
 
-    # evaluate the loss on train/val sets and write checkpoints
+    # 计算训练数据集的损失和测试数据集的损失, 并决定是否保存模型的检查点文件.
     if iter_num % eval_interval == 0:
         losses = estimate_loss()
         print(f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
-        if losses['val'] < best_val_loss or always_save_checkpoint:
+        if losses['val'] < best_val_loss:
             best_val_loss = losses['val']
             if iter_num > 0:
                 checkpoint = {
@@ -166,8 +161,6 @@ while True:
                 }
                 print(f"将模型的检查点文件保存到 `ckpt.pt`")
                 torch.save(checkpoint, 'ckpt.pt')
-    if iter_num == 0 and eval_only:
-        break
 
     # forward backward update, with optional gradient accumulation to simulate larger batch size
     # and using the GradScaler if data type is float16
@@ -193,10 +186,9 @@ while True:
     dt = t1 - t0
     t0 = t1
     if iter_num % log_interval == 0:
-        lossf = loss.item() # loss as float. note: this is a CPU-GPU sync point
+        lossf = loss.item() # 将损失转换为float类型的浮点数.
         print(f"第{iter_num}轮: 损失大小 {lossf:.4f}, 本轮训练时长 {dt*1000:.2f}ms")
     iter_num += 1
-    local_iter_num += 1
 
     # 终止条件
     if iter_num > max_iters:

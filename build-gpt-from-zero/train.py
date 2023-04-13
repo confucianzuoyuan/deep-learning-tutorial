@@ -10,28 +10,27 @@ from model import GPTConfig, GPT
 
 # -----------------------------------------------------------------------------
 # I/O
-eval_interval = 2000
 log_interval = 1
 eval_iters = 20
 # 数据
-gradient_accumulation_steps = 5 # used to simulate larger batch sizes
-batch_size = 12 # if gradient_accumulation_steps > 1, this is the micro-batch size
+gradient_accumulation_steps = 40 # 用来模拟更大的批
+batch_size = 12 # 最小的批的大小
 block_size = 64
 # 模型的配置
 n_layer = 4
 n_head = 4
 n_embd = 128
 dropout = 0.0 # for pretraining 0 is good, for finetuning try 0.1+
-bias = False # do we use bias inside LayerNorm and Linear layers?
+bias = False # 在层归一化(LayerNorm)和线性变换(nn.Linear)中不使用偏置.
 # AdamW优化器(adamw optimizer)
 learning_rate = 1e-3 # 最大学习率
-max_iters = 2000 # total number of training iterations
+max_iters = 2000 # 训练2000轮
 weight_decay = 1e-1
 beta1 = 0.9
 beta2 = 0.99
 grad_clip = 1.0 # clip gradients at this value, or disable if == 0.0
-# learning rate decay settings
-decay_lr = True # whether to decay the learning rate
+# 关于学习率衰减的配置.
+decay_lr = True # 是否衰减学习率.
 warmup_iters = 100 # how many steps to warm up for
 lr_decay_iters = 2000 # should be ~= max_iters per Chinchilla
 min_lr = 1e-4 # 最小学习率, 取learning_rate/10.
@@ -42,10 +41,6 @@ dtype = 'bfloat16' # 'float32', 'bfloat16', or 'float16', the latter will auto i
 config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))]
 config = {k: globals()[k] for k in config_keys} # will be useful for logging
 # -----------------------------------------------------------------------------
-
-# various inits, derived attributes, I/O setup
-# if not ddp, we are running on a single gpu, and one process
-gradient_accumulation_steps *= 8 # simulate 8 gpus
 
 torch.manual_seed(1337)
 torch.backends.cuda.matmul.allow_tf32 = True # allow tf32 on matmul
